@@ -32,7 +32,7 @@ exec(char *path, char **argv)
     goto bad;
 
   // Load program into memory.
-  sz = 0;
+  sz = PGSIZE;
   for(i=0, off=elf.phoff; i<elf.phnum; i++, off+=sizeof(ph)){
     if(readi(ip, (char*)&ph, off, sizeof(ph)) != sizeof(ph))
       goto bad;
@@ -87,6 +87,14 @@ exec(char *path, char **argv)
   proc->tf->eip = elf.entry;  // main
   proc->tf->esp = sp;
   switchuvm(proc);
+
+ // set values to track proc's shared pages
+  int j = 0;
+  for (; j< 4; j++) {
+    proc->shared_child_pages[j] = proc->shared_pages[j];
+    proc->shared_pages[j] = NULL;
+  }
+  proc->shared_page_count = 0;
   freevm(oldpgdir);
 
   return 0;

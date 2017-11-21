@@ -17,8 +17,9 @@
 int
 fetchint(struct proc *p, uint addr, int *ip)
 {
-  if(addr >= p->sz || addr+4 > p->sz)
+  if((addr >= p->sz || addr+4 > p->sz) && (addr < (USERTOP - (p->shared_page_count * PGSIZE)))) {
     return -1;
+  }
   *ip = *(int*)(addr);
   return 0;
 }
@@ -31,10 +32,11 @@ fetchstr(struct proc *p, uint addr, char **pp)
 {
   char *s, *ep;
 
-  if(addr >= p->sz)
+if(addr >= p->sz && (addr < (USERTOP - (p->shared_page_count * PGSIZE)))) {
     return -1;
+  }
   *pp = (char*)addr;
-  ep = (char*)p->sz;
+  ep = (char*)(addr < p->sz ? p->sz : USERTOP);
   for(s = *pp; s < ep; s++)
     if(*s == 0)
       return s - *pp;
@@ -55,11 +57,15 @@ int
 argptr(int n, char **pp, int size)
 {
   int i;
-  
+
   if(argint(n, &i) < 0)
     return -1;
-  if((uint)i >= proc->sz || (uint)i+size > proc->sz)
+  //if((uint)i >= proc->sz || (uint)i+size > proc->sz || (uint) i < PGSIZE)
+  if(i < PGSIZE)
     return -1;
+  if(((uint)i >= proc->sz || (uint)i+size > proc->sz) && (((uint) i < (USERTOP - (proc->shared_page_count * PGSIZE))) || ((uint) i + size > USERTOP))) {
+     return -1;
+   }
   *pp = (char*)i;
   return 0;
 }
@@ -103,6 +109,9 @@ static int (*syscalls[])(void) = {
 [SYS_wait]    sys_wait,
 [SYS_write]   sys_write,
 [SYS_uptime]  sys_uptime,
+[SYS_sharedmem_access] sys_sharedmem_access,
+[SYS_sharedmem_count] sys_sharedmem_count,
+//[SYS_shmem_init] sys_shmem_init,
 };
 
 // Called on a syscall trap. Checks that the syscall number (passed via eax)
@@ -111,7 +120,7 @@ void
 syscall(void)
 {
   int num;
-  
+
   num = proc->tf->eax;
   if(num > 0 && num < NELEM(syscalls) && syscalls[num] != NULL) {
     proc->tf->eax = syscalls[num]();

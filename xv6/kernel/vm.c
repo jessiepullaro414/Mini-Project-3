@@ -10,6 +10,8 @@ extern char data[];  // defined in data.S
 
 static pde_t *kpgdir;  // for use in scheduler()
 
+int count_shared_pages[4];
++void* shared_pages_addresses[4];
 // Allocate one page table for the machine for the kernel address
 // space for scheduler processes.
 void
@@ -40,7 +42,7 @@ seginit(void)
 
   lgdt(c->gdt, sizeof(c->gdt));
   loadgs(SEG_KCPU << 3);
-  
+
   // Initialize cpu-local storage.
   cpu = c;
   proc = 0;
@@ -64,7 +66,7 @@ walkpgdir(pde_t *pgdir, const void *va, int create)
     // Make sure all those PTE_P bits are zero.
     memset(pgtab, 0, PGSIZE);
     // The permissions here are overly generous, but they can
-    // be further restricted by the permissions in the page table 
+    // be further restricted by the permissions in the page table
     // entries, if necessary.
     *pde = PADDR(pgtab) | PTE_P | PTE_W | PTE_U;
   }
@@ -79,7 +81,7 @@ mappages(pde_t *pgdir, void *la, uint size, uint pa, int perm)
 {
   char *a, *last;
   pte_t *pte;
-  
+
   a = PGROUNDDOWN(la);
   last = PGROUNDDOWN(la + size - 1);
   for(;;){
@@ -104,7 +106,7 @@ mappages(pde_t *pgdir, void *la, uint size, uint pa, int perm)
 // A user process uses the same page table as the kernel; the
 // page protection bits prevent it from using anything other
 // than its memory.
-// 
+//
 // setupkvm() and exec() set up every page table like this:
 //   0..640K          : user memory (text, data, stack, heap)
 //   640K..1M         : mapped direct (for IO space)
@@ -190,7 +192,7 @@ void
 inituvm(pde_t *pgdir, char *init, uint sz)
 {
   char *mem;
-  
+
   if(sz >= PGSIZE)
     panic("inituvm: more than a page");
   mem = kalloc();
@@ -231,7 +233,7 @@ allocuvm(pde_t *pgdir, uint oldsz, uint newsz)
   char *mem;
   uint a;
 
-  if(newsz > USERTOP)
+  if(newsz > USERTOP - ((proc->shared_page_count+1) * PGSIZE)))
     return 0;
   if(newsz < oldsz)
     return oldsz;
@@ -286,12 +288,20 @@ freevm(pde_t *pgdir)
 
   if(pgdir == 0)
     panic("freevm: no pgdir");
-  deallocuvm(pgdir, USERTOP, 0);
+  deallocuvm(pgdir, USERTOP - ((proc->shared_page_count+1) * PGSIZE), 0);
   for(i = 0; i < NPDENTRIES; i++){
     if(pgdir[i] & PTE_P)
       kfree((char*)PTE_ADDR(pgdir[i]));
   }
   kfree((char*)pgdir);
+
+  i = 0;
+  for(; i < 4; i++) {
+    if (proc->shared_child_pages[i] != NULL)
+    {
+      count_shared_pages[i]--;
+    }
+  }
 }
 
 // Given a parent process's page table, create a copy
@@ -306,7 +316,7 @@ copyuvm(pde_t *pgdir, uint sz)
 
   if((d = setupkvm()) == 0)
     return 0;
-  for(i = 0; i < sz; i += PGSIZE){
+  for(i = PGSIZE; i < sz; i += PGSIZE){
     if((pte = walkpgdir(pgdir, (void*)i, 0)) == 0)
       panic("copyuvm: pte should exist");
     if(!(*pte & PTE_P))
@@ -318,6 +328,13 @@ copyuvm(pde_t *pgdir, uint sz)
     if(mappages(d, (void*)i, PGSIZE, PADDR(mem), PTE_W|PTE_U) < 0)
       goto bad;
   }
+  i = 0;
+  for(; i < 4; i++)
+  {
+    if (proc->shared_pages[i] != NULL) {
+      count_shared_pages[i]++;
+    }
+ }
   return d;
 
 bad:
@@ -347,7 +364,7 @@ copyout(pde_t *pgdir, uint va, void *p, uint len)
 {
   char *buf, *pa0;
   uint n, va0;
-  
+
   buf = (char*)p;
   while(len > 0){
     va0 = (uint)PGROUNDDOWN(va);
@@ -364,3 +381,44 @@ copyout(pde_t *pgdir, uint va, void *p, uint len)
   }
   return 0;
 }
+
+void*
+sharedmem_access(int page_number)
+{
+  if (page_number < 0) return NULL;
+  if (page_number >= 4) return NULL;
+  if (proc->shared_pages[page_number] != NULL) {
+    return proc->shared_pages[page_number];
+  }
+
+  void* map = (void*) (USERTOP - ((proc->shared_page_count+1) * PGSIZE));
+  if (proc->sz >= (int) map) return NULL;
+  if (mappages(proc->pgdir, map, PGSIZE, PADDR(shared_pages_addresses[page_number]), PTE_W|PTE_U) < 0) return NULL;
+
+  proc->shared_page_count++;
+  count_shared_pages[page_number]++;
+  proc->shared_pages[page_number] = map;
+
+  return map;
+}
+
+int
+sharedmem_count(int page_number)
+{
+  if (page_number < 0 || page_number >= 4)
+    return -1;
+  return count_shared_pages[page_number];
+}
+
+void
+shmem_init(void)
+{
+  int i = 0;
+  for (; i < 4; i++)
+    {
+      count_shared_pages[i] = 0;
+      if ((shared_pages_addresses[i] = kalloc()) == 0) {
+        panic("Initialization of shared memory failed");
+      }
+    }
+ }

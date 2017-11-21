@@ -53,11 +53,11 @@ found:
     return 0;
   }
   sp = p->kstack + KSTACKSIZE;
-  
+
   // Leave room for trap frame.
   sp -= sizeof *p->tf;
   p->tf = (struct trapframe*)sp;
-  
+
   // Set up new context to start executing at forkret,
   // which returns to trapret.
   sp -= 4;
@@ -68,6 +68,13 @@ found:
   memset(p->context, 0, sizeof *p->context);
   p->context->eip = (uint)forkret;
 
+  p->shared_page_count = 0;
+  int i = 0;
+  for (; i < 4; i++)
+  {
+    p->shared_pages[i] = NULL;
+ }
+
   return p;
 }
 
@@ -77,7 +84,7 @@ userinit(void)
 {
   struct proc *p;
   extern char _binary_initcode_start[], _binary_initcode_size[];
-  
+
   p = allocproc();
   acquire(&ptable.lock);
   initproc = p;
@@ -107,7 +114,7 @@ int
 growproc(int n)
 {
   uint sz;
-  
+
   sz = proc->sz;
   if(n > 0){
     if((sz = allocuvm(proc->pgdir, sz, sz + n)) == 0)
@@ -152,10 +159,16 @@ fork(void)
     if(proc->ofile[i])
       np->ofile[i] = filedup(proc->ofile[i]);
   np->cwd = idup(proc->cwd);
- 
+
   pid = np->pid;
   np->state = RUNNABLE;
   safestrcpy(np->name, proc->name, sizeof(proc->name));
+  np->shared_page_count = proc->shared_page_count;
+  i = 0;
+  for (; i < 4; i++)
+  {
+    np->shared_pages[i] = proc->shared_pages[i];
+  }
   return pid;
 }
 
@@ -223,6 +236,11 @@ wait(void)
         pid = p->pid;
         kfree(p->kstack);
         p->kstack = 0;
+        int ind = 0;
+        for (; ind < 4; ind++)
+        {
+          proc->shared_child_pages[ind] = p->shared_pages[ind];
+        }
         freevm(p->pgdir);
         p->state = UNUSED;
         p->pid = 0;
@@ -322,7 +340,7 @@ forkret(void)
 {
   // Still holding ptable.lock from scheduler.
   release(&ptable.lock);
-  
+
   // Return to "caller", actually trapret (see allocproc).
 }
 
@@ -425,7 +443,7 @@ procdump(void)
   struct proc *p;
   char *state;
   uint pc[10];
-  
+
   for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
     if(p->state == UNUSED)
       continue;
@@ -442,5 +460,3 @@ procdump(void)
     cprintf("\n");
   }
 }
-
-
